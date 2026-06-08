@@ -87,7 +87,9 @@ def supervisor_node(state: CodingState) -> dict:
 
     prompt = "\n".join(prompt_parts)
 
-    result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+    # 传入完整历史消息，保留多轮对话上下文
+    existing = list(state.get("messages", []))
+    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
     last_msg = result["messages"][-1].content
 
     decision = _parse_decision(last_msg, state)

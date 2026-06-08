@@ -48,7 +48,8 @@ def explorer_node(state: CodingState) -> dict:
         f"请按照工作流程探索代码库，先了解结构再深入细节。"
     )
 
-    result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+    existing = list(state.get("messages", []))
+    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
     last_msg = result["messages"][-1].content
 
     relevant_files = _extract_files(last_msg, workspace)

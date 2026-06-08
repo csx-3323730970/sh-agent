@@ -55,7 +55,8 @@ def reviewer_node(state: CodingState) -> dict:
 
     prompt = "\n".join(prompt_parts)
 
-    result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+    existing = list(state.get("messages", []))
+    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
     last_msg = result["messages"][-1].content
 
     approved = "审查通过" in last_msg
