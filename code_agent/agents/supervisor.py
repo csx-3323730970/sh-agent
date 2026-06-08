@@ -98,6 +98,7 @@ def supervisor_node(state: CodingState) -> dict:
     return {
         "task_plan": task_plan,
         "current_agent": decision,
+        "messages": result["messages"],
     }
 
 

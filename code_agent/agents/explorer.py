@@ -57,6 +57,7 @@ def explorer_node(state: CodingState) -> dict:
     return {
         "exploration_result": last_msg,
         "relevant_files": relevant_files,
+        "messages": result["messages"],
     }
 
 

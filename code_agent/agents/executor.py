@@ -58,4 +58,5 @@ def executor_node(state: CodingState) -> dict:
     return {
         "test_result": last_msg,
         "test_passed": "failed" not in last_msg.lower() and "error" not in last_msg.lower(),
+        "messages": result["messages"],
     }

@@ -64,4 +64,5 @@ def reviewer_node(state: CodingState) -> dict:
     return {
         "review_feedback": last_msg,
         "review_approved": approved,
+        "messages": result["messages"],
     }
