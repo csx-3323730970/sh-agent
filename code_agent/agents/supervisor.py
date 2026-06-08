@@ -3,53 +3,53 @@ from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.state import CodingState
+from code_agent.project_context import get_project_context, format_project_context
 
-SUPERVISOR_PROMPT = """你是 Supervisor，负责任务分析和多 Agent 调度决策。
+SUPERVISOR_PROMPT = """你是 Supervisor，一个 Multi-Agent 编码系统的调度核心。
 
-## 你的角色
-你本身不持有任何工具，只负责：
-1. 分析用户请求
-2. 拆解为执行计划
-3. 决定下一步需要哪个 Agent
+## 核心职责
+你本身不持有任何工具，只做决策：
+1. 理解用户意图 — 是只读查询、代码修改、还是运行验证
+2. 规划执行路径 — 选择最少 Agent 步骤完成目标
+3. 判断终止时机 — 目标达成时果断 finish，不要过度调度
 
-## Agent 团队
-| Agent | 职责 | 持有工具 |
-|-------|------|---------|
-| Explorer | 搜索、阅读、理解代码 | read_file, grep, glob_files, list_dir |
-| Coder | 编写和修改代码 | read_file, write_file, edit_file, grep, glob_files, list_dir |
-| Reviewer | 审查代码质量 | read_file, grep, list_dir, bash |
-| Executor | 运行测试和验证 | bash, read_file |
+## Agent 能力矩阵
+| Agent     | 工具                                     | 适用场景                  |
+|-----------|------------------------------------------|---------------------------|
+| Explorer  | read_file, grep, glob_files, list_dir   | 搜索代码、理解结构、定位文件 |
+| Coder     | read_file, write_file, edit_file, grep  | 写新代码、修改现有代码     |
+| Reviewer  | read_file, grep, list_dir, bash         | 审查改动、检查安全与质量   |
+| Executor  | bash, read_file                         | 运行测试、执行命令验证     |
 
-## 典型流程
-1. 用户要"修复一个 bug"或"加一个功能" → Explorer(定位代码) → Coder(修改) → Reviewer(审查) → Executor(测试)
-2. 用户要"读某段代码" → Explorer(搜索+读取) → 直接回复
-3. 用户要"运行测试" → Executor(执行) → 直接回复
-4. Reviewer 发现问题 → Coder(修复) → Reviewer(再审)，最多重试 3 轮
+## 路由策略
+- 只读任务（分析、解释、查找）：Explorer → finish
+- 代码修改：Explorer → Coder → Reviewer → Executor → finish
+- 运行命令：Executor → finish
+- 代码审查（不改）：Explorer → Reviewer → finish
+- Reviewer 不通过时 Coder→Reviewer 自动循环，最多 {max_retries} 轮，你无需干预
 
 ## 输出格式
-每次决策输出以下格式：
-
 ```
-任务分析: <一句话分析用户需求>
-执行计划: <分步骤描述>
+任务分析: <一句话>
+执行计划: <步骤>
 决策: <explore/code/review/execute/finish>
-```
-
-决策关键词说明：
-- explore: 需要先理解代码
-- code: 需要编写/修改代码
-- review: 需要审查 Coder 的产出
-- execute: 需要运行测试验证
-- finish: 所有步骤完成
-"""
+```"""
 
 
 def supervisor_node(state: CodingState) -> dict:
+    workspace = state.get("workspace_dir", ".")
+    max_retries = state.get("max_retries", 3)
+    prompt_text = SUPERVISOR_PROMPT.replace("{max_retries}", str(max_retries))
+
     agent = create_agent(
         model=get_chat_model(),
-        system_prompt=SUPERVISOR_PROMPT,
-        tools=[],  # Supervisor 无工具，纯推理
+        system_prompt=prompt_text,
+        tools=[],
     )
+
+    # 项目上下文
+    ctx = get_project_context(workspace)
+    proj_info = format_project_context(ctx)
 
     task = state.get("user_request", "")
     exploration = state.get("exploration_result", "")
@@ -57,30 +57,32 @@ def supervisor_node(state: CodingState) -> dict:
     review_approved = state.get("review_approved", False)
     test_result = state.get("test_result", "")
     retry_count = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 3)
 
-    prompt_parts = [f"用户需求: {task}"]
+    prompt_parts = [
+        f"## 项目信息\n{proj_info}",
+        f"\n## 用户需求\n{task}",
+    ]
 
     # 反馈当前状态
+    status = []
     if exploration:
-        prompt_parts.append(f"\n[状态] Explorer 已完成代码分析")
+        status.append("✅ Explorer 已完成代码分析")
     else:
-        prompt_parts.append("\n[状态] 尚未探索代码")
+        status.append("⬜ 尚未探索代码")
 
     if review_feedback:
         if review_approved:
-            prompt_parts.append(f"[状态] Reviewer 审查通过")
+            status.append("✅ Reviewer 审查通过")
         else:
-            prompt_parts.append(f"[状态] Reviewer 要求修改 (第{retry_count}/{max_retries}轮)")
+            status.append(f"❌ Reviewer 要求修改 (第{retry_count}/{max_retries}轮)")
     else:
-        if exploration and not review_feedback:
-            prompt_parts.append("[状态] 代码已修改，等待审查")
-        prompt_parts.append("[状态] 尚未审查")
+        status.append("⬜ 尚未审查")
 
     if test_result:
-        prompt_parts.append(f"[状态] Executor 已执行测试")
+        status.append("✅ Executor 已执行测试")
 
-    prompt_parts.append(f"\n当前审修轮次: {retry_count}/{max_retries}")
+    prompt_parts.append(f"\n## 当前状态\n" + "\n".join(f"- {s}" for s in status))
+    prompt_parts.append(f"\n审修轮次: {retry_count}/{max_retries}")
     prompt_parts.append("\n请输出你的任务分析和决策。")
 
     prompt = "\n".join(prompt_parts)
@@ -88,7 +90,6 @@ def supervisor_node(state: CodingState) -> dict:
     result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
     last_msg = result["messages"][-1].content
 
-    # 解析决策关键词
     decision = _parse_decision(last_msg, state)
     task_plan = _extract_plan(last_msg)
 

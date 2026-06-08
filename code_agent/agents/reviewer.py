@@ -4,31 +4,26 @@ from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
 from code_agent.state import CodingState
+from code_agent.project_context import get_project_context, format_project_context
 
-REVIEWER_PROMPT = """你是 Code Reviewer，负责审查代码改动质量。
+REVIEWER_PROMPT = """你是 Code Reviewer，负责把关代码质量。
 
-## 你的职责
-1. 读取改动后的文件，检查代码质量和正确性
-2. 检查潜在问题：逻辑错误、安全漏洞、边界情况、代码风格
-3. 给出明确的审查结论
-
-## 审查清单
-- [ ] 逻辑正确：改动是否实现了需求
-- [ ] 安全：有无注入风险、密钥泄露、权限问题
-- [ ] 边界：空输入、大文件、异常情况是否处理
-- [ ] 风格：是否和项目现有代码风格一致
-- [ ] 副作用：改动是否会影响其他模块
+## 审查清单（逐条检查）
+- 逻辑正确性：改动是否准确实现了需求，有无遗漏或曲解
+- 安全性：有无注入风险、路径穿越、密钥泄露、权限绕过
+- 边界处理：空输入、None、大文件、并发场景是否安全
+- 代码风格：缩进、命名、引号、import 顺序是否与项目一致
+- 副作用：改动是否影响其他模块、是否破坏公共接口
 
 ## 输出格式
-审查完毕后，给出明确结论：
-- 通过：回复以 **审查通过** 开头
-- 需修改：回复以 **审查不通过** 开头，然后列出具体需要修改的内容
+- 通过：回复以 **审查通过** 开头，可选附小建议
+- 不通过：回复以 **审查不通过** 开头，逐条列出问题 + 修复建议
 
 示例：
 ```
-审查通过。改动逻辑正确，无安全风险，代码风格一致。
-
-小建议（可选）：第 23 行的变量名可改得更语义化。
+**审查通过**
+改动逻辑正确，无安全风险，与现有风格一致。
+小建议：第 23 行变量名可更语义化（非阻塞项）。
 ```
 """
 
@@ -45,15 +40,18 @@ def reviewer_node(state: CodingState) -> dict:
     exploration = state.get("exploration_result", "")
     relevant_files = state.get("relevant_files", [])
 
+    ctx = get_project_context(workspace)
+    proj_info = format_project_context(ctx)
+
     prompt_parts = [
-        f"工作目录: {workspace}",
-        f"用户原需求: {task}",
-        f"\nExplorer 的分析: {exploration}",
+        f"## 项目信息\n{proj_info}",
+        f"\n## 用户原需求\n{task}",
+        f"\n## Explorer 分析\n{exploration}",
     ]
 
     if relevant_files:
-        prompt_parts.append(f"\n请审查以下文件的当前状态: {', '.join(relevant_files)}")
-        prompt_parts.append("先用 read_file 读取每个文件的最新内容，再进行审查。")
+        prompt_parts.append(f"\n## 待审查文件\n" + "\n".join(f"- {f}" for f in relevant_files))
+        prompt_parts.append("\n请先 read_file 读取每个文件，然后逐条对照审查清单检查。")
 
     prompt = "\n".join(prompt_parts)
 

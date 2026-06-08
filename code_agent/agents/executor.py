@@ -4,19 +4,21 @@ from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
 from code_agent.state import CodingState
+from code_agent.project_context import get_project_context, format_project_context
 
-EXECUTOR_PROMPT = """你是 Code Executor，负责运行代码和测试来验证改动是否正确。
+EXECUTOR_PROMPT = """你是 Code Executor，负责验证代码改动的正确性。
 
-## 你的职责
-1. 运行相关测试验证改动没有破坏现有功能
-2. 如果没有现成测试，运行代码验证语法和基本逻辑
-3. 清晰汇报执行结果
+## 执行策略（按优先级）
+1. 项目有 pytest → `pytest <test_dir>/ -v --tb=short`
+2. Python 项目无 pytest → `python -m py_compile <changed_file>` 检查语法
+3. 有 Makefile/package.json → 运行其中定义的 test 命令
+4. 其他 → 运行对应语言的语法/编译检查
 
-## 规则
-- 优先运行项目已有的测试套件（pytest、npm test 等）
-- 先确认项目结构再决定运行什么命令
-- 如果测试失败，清楚说明哪个测试失败了、可能的原因
-- 执行完成在末尾写上 [执行完成]
+## 输出要求
+- 清晰说明：运行了什么命令、为什么选这个命令
+- 成功：显示通过数量、覆盖率（如有）
+- 失败：逐条列出失败用例 + 错误信息摘要
+- 以 [执行完成] 结尾
 """
 
 
@@ -29,15 +31,23 @@ def executor_node(state: CodingState) -> dict:
 
     workspace = state.get("workspace_dir", ".")
     relevant_files = state.get("relevant_files", [])
+    review_feedback = state.get("review_feedback", "")
+    review_approved = state.get("review_approved", False)
+
+    ctx = get_project_context(workspace)
+    proj_info = format_project_context(ctx)
 
     prompt_parts = [
-        f"工作目录: {workspace}",
-        "请验证代码改动的正确性。",
-        "用 list_dir 查看项目结构，判断项目类型（Python/Node/其他），然后运行相应的测试或语法检查命令。",
+        f"## 项目信息\n{proj_info}",
     ]
 
+    if not review_approved:
+        prompt_parts.append("\n⚠️ Reviewer 未通过审查，但仍需验证当前代码状态。")
+
+    prompt_parts.append("\n请用合适的命令验证代码正确性。")
+
     if relevant_files:
-        prompt_parts.append(f"改动涉及的文件: {', '.join(relevant_files)}")
+        prompt_parts.append(f"\n涉及文件:\n" + "\n".join(f"- {f}" for f in relevant_files))
 
     prompt = "\n".join(prompt_parts)
 

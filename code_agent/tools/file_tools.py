@@ -1,5 +1,6 @@
 """文件操作工具 — Read / Write / Edit"""
 import os
+import difflib
 from pathlib import Path
 from langchain_core.tools import tool
 
@@ -11,6 +12,18 @@ def _safe_path(base_dir: str, file_path: str) -> str:
     if not full.startswith(base_dir):
         raise ValueError(f"路径越权: {file_path}")
     return full
+
+
+def _make_diff(file_path: str, original: str, replacement: str) -> str:
+    """生成 unified diff 字符串"""
+    orig_lines = original.splitlines(keepends=True) or ["\n"]
+    repl_lines = replacement.splitlines(keepends=True) or ["\n"]
+    diff = difflib.unified_diff(
+        orig_lines, repl_lines,
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+    )
+    return "".join(diff)
 
 
 @tool(description="读取指定文件的全部内容。入参: file_path(相对于工作目录的文件路径)")
@@ -31,11 +44,25 @@ def read_file(file_path: str, workspace_dir: str = ".") -> str:
 @tool(description="创建或覆盖文件。入参: file_path(相对路径), content(文件内容)")
 def write_file(file_path: str, content: str, workspace_dir: str = ".") -> str:
     abs_path = _safe_path(workspace_dir, file_path)
+    existed = os.path.exists(abs_path)
+    old_content = None
+    if existed:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+            old_content = f.read()
+
     os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
     with open(abs_path, "w", encoding="utf-8") as f:
         f.write(content)
     lines = content.count("\n") + 1
-    return f"[已写入] {file_path} ({lines} 行, {len(content)} 字符)"
+
+    tag = "[DIFF:write]"
+    diff_text = ""
+    if existed and old_content is not None:
+        diff_text = _make_diff(file_path, old_content, content)
+    else:
+        diff_text = f"@@ 新文件: {file_path} ({lines} 行, {len(content)} 字符)"
+
+    return f"{tag}\n{diff_text}\n[已写入] {file_path} ({lines} 行, {len(content)} 字符)"
 
 
 @tool(description="精确替换文件中的字符串。入参: file_path(相对路径), old_string(要被替换的内容), new_string(替换后的内容)")
@@ -57,7 +84,9 @@ def edit_file(file_path: str, old_string: str, new_string: str, workspace_dir: s
     new_content = content.replace(old_string, new_string, 1)
     with open(abs_path, "w", encoding="utf-8") as f:
         f.write(new_content)
-    return f"[已修改] {file_path} (1 处替换)"
+
+    diff_text = _make_diff(file_path, content, new_content)
+    return f"[DIFF:edit]\n{diff_text}\n[已修改] {file_path} (1 处替换)"
 
 
 def _find_positions(content: str, target: str, max_shown: int = 5) -> str:

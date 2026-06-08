@@ -2,20 +2,19 @@
 import os
 import sys
 import uuid
-from rich.live import Live
 from rich.markdown import Markdown
-from rich.spinner import Spinner
-from rich.text import Text
 from rich.console import Console
+from rich.syntax import Syntax
+from rich.panel import Panel
 from langchain_core.messages import HumanMessage
 
 from code_agent.state import CodingState
 from code_agent.graph import compile_graph
 from code_agent.config import get_setting
-from rich.panel import Panel
 from code_agent.ui.terminal import (
     console, render_banner, render_help, render_agent_header, create_prompt_session,
 )
+from code_agent.ui.stream_handler import TokenStreamHandler
 
 
 console = Console()
@@ -91,7 +90,10 @@ def main():
 
         # 构建初始状态（历史消息 + 本轮问题）
         thread_id = f"{session_id}-{turn}"
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [TokenStreamHandler()],
+        }
 
         initial_state: CodingState = {
             "messages": messages_history + [HumanMessage(content=user_input)],
@@ -151,12 +153,12 @@ def main():
 
 
 def _render_message(message, agent_name: str):
-    """渲染一条消息"""
+    """渲染一条消息 — AI 文本已流式输出，只处理工具调用/结果/用户输入/diff"""
     content = message.content if hasattr(message, "content") else str(message)
     if not content:
         return
 
-    # 工具调用消息特殊处理
+    # 工具调用消息
     if hasattr(message, "tool_calls") and message.tool_calls:
         for tc in message.tool_calls:
             name = tc.get("name", "?")
@@ -164,21 +166,64 @@ def _render_message(message, agent_name: str):
             console.print(f"  [dim]🔧 {name}({args})[/dim]")
         return
 
-    # 工具返回结果
+    # 工具返回结果 — 检查是否包含 diff
     if hasattr(message, "name") and message.name:
-        preview = content[:150].replace("\n", " ")
-        console.print(f"  [dim]  → {preview}[/dim]")
+        _render_tool_result(content)
         return
 
-    # 普通文本
+    # 用户消息
     if hasattr(message, "type") and message.type == "human":
         console.print(f"[bold white]{content}[/bold white]")
-    else:
-        # AI 回复截取前 200 字符在终端展示
-        preview = content[:300]
-        if len(content) > 300:
-            preview += "..."
-        console.print(f"  {preview}")
+        return
+
+    # AI 消息内容已通过 TokenStreamHandler 流式输出，此处跳过
+
+
+def _render_tool_result(content: str):
+    """渲染工具返回结果，diff 内容高亮显示"""
+    # 检测 diff 标记
+    if content.startswith("[DIFF:edit]") or content.startswith("[DIFF:write]"):
+        parts = content.split("\n", 1)
+        if len(parts) < 2:
+            return
+        body = parts[1]
+
+        diff_part = body
+        status_line = ""
+        tag = "修改"
+
+        if "\n[已修改]" in body:
+            diff_part, status_line = body.rsplit("\n[已修改]", 1)
+            tag = "已修改"
+        elif "\n[已写入]" in body:
+            diff_part, status_line = body.rsplit("\n[已写入]", 1)
+            tag = "已写入"
+
+        if diff_part.strip():
+            if diff_part.startswith("@@ 新文件:"):
+                console.print(f"  [dim]  → {diff_part}[/dim]")
+            else:
+                syntax = Syntax(
+                    diff_part, "diff", theme="monokai",
+                    line_numbers=False, word_wrap=True
+                )
+                panel = Panel(
+                    syntax,
+                    title=f"[bold yellow]📝 {tag}[/bold yellow]",
+                    border_style="yellow",
+                    padding=(0, 1),
+                )
+                console.print(panel)
+
+        if status_line:
+            console.print(f"  [dim]  → [{tag}] {status_line}[/dim]")
+        return
+
+    # 普通工具结果
+    preview = content[:200].replace("\n", " ")
+    if len(content) > 200:
+        preview += "..."
+    console.print(f"  [dim]  → {preview}[/dim]")
 
 
 def _handle_command(cmd: str, console: Console, messages_history: list = None):
