@@ -72,9 +72,11 @@ def render_help():
         Panel(
             "[bold]可用命令:[/bold]\n"
             "  [cyan]/help[/cyan]    显示此帮助\n"
+            "  [cyan]/new[/cyan]     开始新会话（清空上下文）\n"
             "  [cyan]/quit[/cyan]    退出程序\n"
-            "  [cyan]/clear[/cyan]   清除对话历史\n"
-            "  [cyan]/status[/cyan]  查看当前会话状态\n\n"
+            "  [cyan]/clear[/cyan]   清屏\n"
+            "  [cyan]/status[/cyan]  查看当前会话状态\n"
+            "  [cyan]/setup[/cyan]   重新配置 API\n\n"
             "[bold]直接输入编程问题即可开始:[/bold]\n"
             "  - 帮我修复 xxx.py 中的空指针异常\n"
             "  - 在 src/ 下新增一个用户认证模块\n"

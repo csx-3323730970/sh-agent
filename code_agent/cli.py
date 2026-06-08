@@ -46,6 +46,11 @@ def main():
     session = create_prompt_session()
     workspace_dir = os.getcwd()
 
+    # 会话级 ID + 多轮消息累积
+    session_id = uuid.uuid4().hex[:8]
+    messages_history: list = []
+    turn = 0
+
     # 快捷问题映射
     shortcuts = {
         "1": "列出当前项目的文件结构",
@@ -56,7 +61,8 @@ def main():
 
     while True:
         try:
-            user_input = session.prompt([("class:prompt", "\n> ")]).strip()
+            prompt_text = f"\n[{turn + 1}] > " if messages_history else "\n> "
+            user_input = session.prompt([("class:prompt", prompt_text)]).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]再见！[/dim]")
             break
@@ -71,15 +77,24 @@ def main():
 
         # 内置命令
         if user_input.startswith("/"):
-            _handle_command(user_input, console)
+            if user_input.lower().strip() in ("/new",):
+                messages_history.clear()
+                turn = 0
+                console.clear()
+                render_banner()
+                console.print("[green]✅ 已开始新会话[/green]")
+                continue
+            _handle_command(user_input, console, messages_history)
             continue
 
-        # 构建初始状态
-        session_id = uuid.uuid4().hex[:12]
-        config = {"configurable": {"thread_id": session_id}}
+        turn += 1
+
+        # 构建初始状态（历史消息 + 本轮问题）
+        thread_id = f"{session_id}-{turn}"
+        config = {"configurable": {"thread_id": thread_id}}
 
         initial_state: CodingState = {
-            "messages": [HumanMessage(content=user_input)],
+            "messages": messages_history + [HumanMessage(content=user_input)],
             "user_request": user_input,
             "workspace_dir": workspace_dir,
             "task_plan": "",
@@ -123,6 +138,12 @@ def main():
                 console.print()
                 console.print(Markdown(final))
 
+            # 保存本轮消息到历史（截断过长历史防止 token 爆炸）
+            messages_history = chunk.get("messages", messages_history)
+            if len(messages_history) > 40:
+                # 保留最近 40 条（约 20 轮对话）
+                messages_history = messages_history[-40:]
+
         except Exception as e:
             console.print(f"\n[red]执行出错: {e}[/red]")
 
@@ -160,7 +181,7 @@ def _render_message(message, agent_name: str):
         console.print(f"  {preview}")
 
 
-def _handle_command(cmd: str, console: Console):
+def _handle_command(cmd: str, console: Console, messages_history: list = None):
     cmd = cmd.lower().strip()
     if cmd == "/quit" or cmd == "/q":
         console.print("[dim]再见！[/dim]")
@@ -171,7 +192,9 @@ def _handle_command(cmd: str, console: Console):
         console.clear()
         render_banner()
     elif cmd == "/status":
+        msg_count = len(messages_history) if messages_history else 0
         console.print(f"[dim]工作目录: {os.getcwd()}[/dim]")
+        console.print(f"[dim]会话轮次: {msg_count // 2} 轮[/dim]")
     elif cmd == "/setup":
         _setup_wizard()
     else:
