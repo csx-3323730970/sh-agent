@@ -123,6 +123,8 @@ def _parse_decision(text: str, state: CodingState) -> str:
             return "code"
         if "review" in text_lower:
             return "review"
+        if "execute" in text_lower:
+            return "execute"
         return "finish"
 
     # Reviewer 不通过且未超限 → Coder 修复
