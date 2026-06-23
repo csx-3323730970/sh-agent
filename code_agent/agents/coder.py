@@ -1,5 +1,5 @@
 """Coder Agent — 写代码、改代码"""
-from langchain.agents import create_agent
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
@@ -26,10 +26,10 @@ CODER_PROMPT = """你是 Code Writer，负责编写和修改代码。
 
 
 def coder_node(state: CodingState) -> dict:
-    agent = create_agent(
+    agent = create_react_agent(
         model=get_chat_model(),
-        system_prompt=CODER_PROMPT,
         tools=AGENT_TOOLS["coder"],
+        prompt=CODER_PROMPT,
     )
 
     task = state.get("user_request", "")

@@ -4,22 +4,30 @@ from langchain_core.tools import tool
 from code_agent.config import get_setting
 
 
-def _check_safety(command: str) -> tuple[bool, str]:
-    """安全检查：返回 (是否安全, 原因)"""
-    blocked = get_setting("safety", "bash_blocked_keywords")
-    for keyword in blocked:
+def check_safety(command: str, blocked_keywords: list[str] | None = None,
+                 allowed_prefixes: list[str] | None = None) -> tuple[bool, str]:
+    """安全检查：返回 (是否安全, 原因)。纯函数，可测试。"""
+    if blocked_keywords is None:
+        blocked_keywords = get_setting("safety", "bash_blocked_keywords")
+    if allowed_prefixes is None:
+        allowed_prefixes = get_setting("safety", "bash_allowed_prefixes")
+
+    for keyword in blocked_keywords:
         if keyword in command:
             return False, f"命中禁止关键词: {keyword}"
 
-    allowed = get_setting("safety", "bash_allowed_prefixes")
-    # 空命令拒绝
     if not command.strip():
         return False, "空命令"
 
-    for prefix in allowed:
+    for prefix in allowed_prefixes:
         if command.startswith(prefix):
             return True, ""
     return False, f"命令前缀不在白名单中: {command[:50]}"
+
+
+def _check_safety(command: str) -> tuple[bool, str]:
+    """安全检查：返回 (是否安全, 原因)。兼容旧接口。"""
+    return check_safety(command)
 
 
 @tool(description="执行 Shell 命令并返回输出。入参: command(要执行的命令)。仅在 Coder/Executor Agent 中可用。")

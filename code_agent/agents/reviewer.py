@@ -1,5 +1,5 @@
 """Reviewer Agent — 审查代码改动，检查质量"""
-from langchain.agents import create_agent
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
@@ -29,10 +29,10 @@ REVIEWER_PROMPT = """你是 Code Reviewer，负责把关代码质量。
 
 
 def reviewer_node(state: CodingState) -> dict:
-    agent = create_agent(
+    agent = create_react_agent(
         model=get_chat_model(),
-        system_prompt=REVIEWER_PROMPT,
         tools=AGENT_TOOLS["reviewer"],
+        prompt=REVIEWER_PROMPT,
     )
 
     task = state.get("user_request", "")

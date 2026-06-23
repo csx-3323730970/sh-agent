@@ -242,6 +242,11 @@ def _handle_command(cmd: str, console: Console, messages_history: list = None):
         console.print(f"[dim]会话轮次: {msg_count // 2} 轮[/dim]")
     elif cmd == "/setup":
         _setup_wizard()
+    elif cmd == "/eval" or cmd == "/evaluate":
+        _run_eval()
+    elif cmd.startswith("/eval "):
+        agent = cmd.split(" ", 1)[1].strip()
+        _run_eval(agent)
     else:
         console.print(f"[yellow]未知命令: {cmd}[/yellow] 输入 /help 查看帮助")
 
@@ -304,6 +309,27 @@ def _setup_wizard():
             console.print("[yellow]请检查 API Key 和 Base URL 是否正确[/yellow]")
 
     console.print()
+
+
+def _run_eval(agent_filter: str = ""):
+    """运行 Agent 评测"""
+    from pathlib import Path
+    from tests.eval.runner import run_eval
+
+    console.print()
+    console.print("[bold cyan]正在运行 Agent 评测...[/bold cyan]")
+    console.print("[dim]离线模式 (mock) — 不调用 LLM，仅测试框架逻辑[/dim]")
+    console.print()
+
+    agents = [agent_filter] if agent_filter else None
+    try:
+        renderer = run_eval(mock=True, agents=agents)
+        renderer.render_summary()
+    except Exception as e:
+        console.print(f"[red]评测运行失败: {e}[/red]")
+
+    console.print()
+    console.print("[dim]💡 使用 /eval --live 可运行真实 LLM 评测 (需 API Key)[/dim]")
 
 
 if __name__ == "__main__":

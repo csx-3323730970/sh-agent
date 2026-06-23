@@ -1,5 +1,5 @@
 """Supervisor Agent — 任务拆解 + 动态调度"""
-from langchain.agents import create_agent
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.state import CodingState
@@ -41,10 +41,10 @@ def supervisor_node(state: CodingState) -> dict:
     max_retries = state.get("max_retries", 3)
     prompt_text = SUPERVISOR_PROMPT.replace("{max_retries}", str(max_retries))
 
-    agent = create_agent(
+    agent = create_react_agent(
         model=get_chat_model(),
-        system_prompt=prompt_text,
         tools=[],
+        prompt=prompt_text,
     )
 
     # 项目上下文
@@ -102,23 +102,20 @@ def supervisor_node(state: CodingState) -> dict:
     }
 
 
-def _parse_decision(text: str, state: CodingState) -> str:
-    """从 Supervisor 输出中解析路由决策"""
+def parse_decision(text: str, exploration_result: str | None = None,
+                   review_feedback: str | None = None, review_approved: bool = False,
+                   test_result: str | None = None, retry_count: int = 0,
+                   max_retries: int = 3) -> str:
+    """从 Supervisor 输出中解析路由决策（纯函数，可测试）"""
     text_lower = text.lower()
 
-    # LLM 明确说 finish 时直接结束
     if "finish" in text_lower:
         return "finish"
 
-    # 没有探索过 → 先探索
-    if not state.get("exploration_result"):
+    if not exploration_result:
         return "explore"
 
-    # 已有探索结果但没有审查 → 根据 LLM 决策判断
-    # 如果 LLM 决定 code → 去写代码
-    # 如果 LLM 决定 review → 去审查
-    # 默认：探索后直接结束（读代码等只读任务）
-    if not state.get("review_feedback"):
+    if not review_feedback:
         if "code" in text_lower:
             return "code"
         if "review" in text_lower:
@@ -127,20 +124,28 @@ def _parse_decision(text: str, state: CodingState) -> str:
             return "execute"
         return "finish"
 
-    # Reviewer 不通过且未超限 → Coder 修复
-    if not state.get("review_approved"):
-        if state.get("retry_count", 0) < state.get("max_retries", 3):
+    if not review_approved:
+        if retry_count < max_retries:
             return "code"
         return "finish"
 
-    # Reviewer 通过但还没测试 → 执行
-    if not state.get("test_result"):
-        if "execute" in text_lower or "review" in text_lower:
-            return "execute"
+    if not test_result:
         return "execute"
 
-    # 所有步骤完成
     return "finish"
+
+
+def _parse_decision(text: str, state: CodingState) -> str:
+    """从 Supervisor 输出中解析路由决策（兼容旧接口）"""
+    return parse_decision(
+        text=text,
+        exploration_result=state.get("exploration_result"),
+        review_feedback=state.get("review_feedback"),
+        review_approved=state.get("review_approved", False),
+        test_result=state.get("test_result"),
+        retry_count=state.get("retry_count", 0),
+        max_retries=state.get("max_retries", 3),
+    )
 
 
 def _extract_plan(text: str) -> str:

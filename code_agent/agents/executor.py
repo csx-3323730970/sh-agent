@@ -1,5 +1,5 @@
 """Executor Agent — 运行测试、验证结果"""
-from langchain.agents import create_agent
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
@@ -23,10 +23,10 @@ EXECUTOR_PROMPT = """你是 Code Executor，负责验证代码改动的正确性
 
 
 def executor_node(state: CodingState) -> dict:
-    agent = create_agent(
+    agent = create_react_agent(
         model=get_chat_model(),
-        system_prompt=EXECUTOR_PROMPT,
         tools=AGENT_TOOLS["executor"],
+        prompt=EXECUTOR_PROMPT,
     )
 
     workspace = state.get("workspace_dir", ".")

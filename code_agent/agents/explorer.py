@@ -1,5 +1,5 @@
 """Explorer Agent — 搜索、阅读、理解代码"""
-from langchain.agents import create_agent
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
 from code_agent.model_factory import get_chat_model
 from code_agent.tools.registry import AGENT_TOOLS
@@ -28,10 +28,10 @@ EXPLORER_PROMPT = """你是 Code Explorer，负责深入理解代码库。
 
 
 def explorer_node(state: CodingState) -> dict:
-    agent = create_agent(
+    agent = create_react_agent(
         model=get_chat_model(),
-        system_prompt=EXPLORER_PROMPT,
         tools=AGENT_TOOLS["explorer"],
+        prompt=EXPLORER_PROMPT,
     )
 
     task = state.get("user_request", "")
