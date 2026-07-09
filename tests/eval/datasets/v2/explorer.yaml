@@ -1,0 +1,77 @@
+# Explorer V2 Golden Dataset — 召回率 + 精确率 + 依赖感知
+
+- name: "定位空指针修复相关文件"
+  input: "找到修复 user_service.py 空指针所需的所有相关文件"
+  mock_output: |
+    探索完成。关键发现:
+    - src/user_service.py: 第44-47行 get_user_name() 有空指针风险
+    - src/models/user.py: User 类定义 (name 字段)
+    - src/controller.py: 第30行调用 get_user_name()
+    - tests/test_user.py: 相关测试
+
+    [探索完成]
+  mock_metadata:
+    files:
+      - "src/user_service.py"
+      - "src/models/user.py"
+      - "src/controller.py"
+      - "tests/test_user.py"
+  expected:
+    expected_files:
+      - "src/user_service.py"
+      - "src/models/user.py"
+      - "tests/test_user.py"
+    dependency_chain:
+      - "src/models/user.py"
+      - "src/user_service.py"
+
+- name: "分析项目结构-无特定文件期望"
+  input: "帮我分析这个项目的整体架构"
+  mock_output: |
+    项目采用分层架构:
+    - code_agent/agents/: 5 个 Agent 实现
+    - code_agent/tools/: 文件/搜索/Shell 工具
+    - code_agent/middleware/: 安全中间件
+    - code_agent/storage/: Redis+PostgreSQL
+    - tests/: 单元测试 + 评测框架
+
+    [探索完成]
+  mock_metadata:
+    files:
+      - "code_agent/graph.py"
+      - "code_agent/state.py"
+      - "code_agent/cli.py"
+      - "code_agent/agents/supervisor.py"
+      - "code_agent/tools/registry.py"
+  expected:
+    expected_files: []
+    must_contain: ["分层", "架构", "Agent"]
+
+- name: "跨模块依赖发现"
+  input: "如果修改了 models/user.py 的 User 类，哪些文件会受影响"
+  mock_output: |
+    依赖分析:
+    - src/models/user.py (直接修改)
+    - src/schemas/user.py (引用 User 类型)
+    - src/services/user_service.py (使用 User 模型)
+    - tests/factories/user.py (创建 User fixture)
+    - tests/test_user.py (测试 User 行为)
+
+    [探索完成]
+  mock_metadata:
+    files:
+      - "src/models/user.py"
+      - "src/schemas/user.py"
+      - "src/services/user_service.py"
+      - "tests/factories/user.py"
+      - "tests/test_user.py"
+  expected:
+    expected_files:
+      - "src/models/user.py"
+      - "src/schemas/user.py"
+      - "src/services/user_service.py"
+    dependency_chain:
+      - "src/models/user.py"
+      - "src/schemas/user.py"
+      - "src/services/user_service.py"
+      - "tests/factories/user.py"

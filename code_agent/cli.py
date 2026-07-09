@@ -11,6 +11,11 @@ from langchain_core.messages import HumanMessage
 from code_agent.state import CodingState
 from code_agent.graph import compile_graph
 from code_agent.config import get_setting
+from code_agent.context_manager import get_context_manager
+from code_agent.model_factory import verify_cross_model_review
+from code_agent.compression_diagnostics import (
+    get_auditor, render_compression_report, AdaptivePolicy,
+)
 from code_agent.ui.terminal import (
     console, render_banner, render_help, render_agent_header, create_prompt_session,
 )
@@ -36,6 +41,17 @@ def main():
     except Exception:
         console.print("[yellow]Redis 不可用，使用无记忆模式[/yellow]")
         graph = compile_graph(with_checkpoint=False)
+
+    # 检查跨模型审查配置
+    review_check = verify_cross_model_review()
+    if review_check["warning"]:
+        console.print(f"\n[yellow]{review_check['warning']}[/yellow]")
+        console.print("[dim]  Coder: {0}[/dim]".format(review_check["coder_model"]))
+        console.print("[dim]  Reviewer: {0}[/dim]".format(review_check["reviewer_model"]))
+    else:
+        console.print(f"\n[green]✅ 跨模型独立审查已启用[/green]")
+        console.print(f"[dim]  Coder: {review_check['coder_model']}[/dim]")
+        console.print(f"[dim]  Reviewer: {review_check['reviewer_model']}[/dim]")
 
     console.print(
         "\n[dim]💡 输入数字 1-4 快速开始，或直接输入你的编程问题[/dim]"
@@ -79,6 +95,8 @@ def main():
             if user_input.lower().strip() in ("/new",):
                 messages_history.clear()
                 turn = 0
+                get_context_manager().reset()
+                get_auditor().reset()
                 console.clear()
                 render_banner()
                 console.print("[green]✅ 已开始新会话[/green]")
@@ -108,6 +126,7 @@ def main():
             "review_approved": False,
             "test_result": None,
             "test_passed": False,
+            "agent_summaries": None,
             "retry_count": 0,
             "max_retries": get_setting("agent", "max_review_retries"),
             "final_response": None,
@@ -128,11 +147,16 @@ def main():
                     console.print(render_agent_header(current_agent))
                     last_agent = current_agent
 
-                # 渲染最新消息
+                # 渲染最新消息 + 扫描困惑信号
                 if messages:
                     latest = messages[-1]
                     if hasattr(latest, "content") and latest.content:
                         _render_message(latest, current_agent)
+                        # 扫描 Agent 输出中的困惑信号
+                        if hasattr(latest, "type") and latest.type == "ai":
+                            get_auditor().scan_agent_output(
+                                current_agent or "unknown", turn, str(latest.content)
+                            )
 
             # 最终输出
             final = chunk.get("final_response", "")
@@ -247,6 +271,11 @@ def _handle_command(cmd: str, console: Console, messages_history: list = None):
     elif cmd.startswith("/eval "):
         agent = cmd.split(" ", 1)[1].strip()
         _run_eval(agent)
+    elif cmd == "/diag" or cmd == "/diagnostics":
+        _show_diagnostics()
+    elif cmd == "/diag-reset":
+        get_auditor().reset()
+        console.print("[green]✅ 压缩诊断数据已重置[/green]")
     else:
         console.print(f"[yellow]未知命令: {cmd}[/yellow] 输入 /help 查看帮助")
 
@@ -330,6 +359,31 @@ def _run_eval(agent_filter: str = ""):
 
     console.print()
     console.print("[dim]💡 使用 /eval --live 可运行真实 LLM 评测 (需 API Key)[/dim]")
+
+
+def _show_diagnostics():
+    """显示压缩诊断报告"""
+    auditor = get_auditor()
+    health = auditor.get_health()
+    policy = AdaptivePolicy.get_policy_report()
+    report = render_compression_report(health, policy)
+    console.print(f"\n[cyan]{report}[/cyan]")
+
+    # 如果有困惑信号，显示详情
+    if auditor.confusion_signals:
+        console.print("\n[yellow]⚠ Agent 困惑信号详情:[/yellow]")
+        for sig in auditor.confusion_signals[-5:]:
+            console.print(
+                f"  [{sig.agent_name}] L{sig.turn} [{sig.signal_type}] "
+                f"({sig.confidence:.0%}) — {sig.message_snippet[:80]}"
+            )
+
+    # 自适应策略建议
+    console.print("\n[dim]💡 使用 /diag-reset 重置诊断数据[/dim]")
+    console.print(
+        "[dim]💡 当信息损失风险 > 0.5 或关键信息被丢弃时，"
+        "系统会自动降低对应工具的压缩强度[/dim]"
+    )
 
 
 if __name__ == "__main__":

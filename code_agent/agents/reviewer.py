@@ -1,10 +1,12 @@
 """Reviewer Agent — 审查代码改动，检查质量"""
+from threading import Lock
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
-from code_agent.model_factory import get_chat_model
+from code_agent.model_factory import get_agent_model
 from code_agent.tools.registry import AGENT_TOOLS
 from code_agent.state import CodingState
 from code_agent.project_context import get_project_context, format_project_context
+from code_agent.context_manager import get_context_manager, AgentSummary
 
 REVIEWER_PROMPT = """你是 Code Reviewer，负责把关代码质量。
 
@@ -27,18 +29,29 @@ REVIEWER_PROMPT = """你是 Code Reviewer，负责把关代码质量。
 ```
 """
 
+_agent = None
+_lock = Lock()
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _lock:
+            if _agent is None:
+                _agent = create_react_agent(
+                    model=get_agent_model("reviewer"),
+                    tools=AGENT_TOOLS["reviewer"],
+                    prompt=REVIEWER_PROMPT,
+                )
+    return _agent
+
 
 def reviewer_node(state: CodingState) -> dict:
-    agent = create_react_agent(
-        model=get_chat_model(),
-        tools=AGENT_TOOLS["reviewer"],
-        prompt=REVIEWER_PROMPT,
-    )
-
     task = state.get("user_request", "")
     workspace = state.get("workspace_dir", ".")
     exploration = state.get("exploration_result", "")
     relevant_files = state.get("relevant_files", [])
+    code_changes = state.get("code_changes") or []
 
     ctx = get_project_context(workspace)
     proj_info = format_project_context(ctx)
@@ -49,17 +62,35 @@ def reviewer_node(state: CodingState) -> dict:
         f"\n## Explorer 分析\n{exploration}",
     ]
 
+    # 传递 Coder 的实际改动记录给 Reviewer
+    if code_changes:
+        prompt_parts.append(f"\n## Coder 改动记录 ({len(code_changes)} 处改动)")
+        for i, change in enumerate(code_changes, 1):
+            prompt_parts.append(f"{i}. [{change.get('reason', '修改')}] {change.get('file_path', '?')}")
+        prompt_parts.append("\n请 read_file 读取上述文件的最新内容进行审查。")
+
     if relevant_files:
-        prompt_parts.append(f"\n## 待审查文件\n" + "\n".join(f"- {f}" for f in relevant_files))
-        prompt_parts.append("\n请先 read_file 读取每个文件，然后逐条对照审查清单检查。")
+        prompt_parts.append(f"\n## Explorer 标记的相关文件\n" + "\n".join(f"- {f}" for f in relevant_files))
 
     prompt = "\n".join(prompt_parts)
 
+    ctx_mgr = get_context_manager()
     existing = list(state.get("messages", []))
-    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
+    context_messages = ctx_mgr.build_context(
+        "reviewer", existing, prompt,
+        summaries=state.get("agent_summaries"),
+    )
+    result = _get_agent().invoke({"messages": context_messages})
     last_msg = result["messages"][-1].content
 
     approved = "审查通过" in last_msg
+
+    ctx_mgr.record_summary(AgentSummary(
+        agent="reviewer",
+        summary="审查通过" if approved else "审查不通过，需修改",
+        key_findings=[last_msg[:200]],
+        files_touched=relevant_files if relevant_files else [],
+    ))
 
     return {
         "review_feedback": last_msg,

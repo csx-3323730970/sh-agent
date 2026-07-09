@@ -1,0 +1,55 @@
+# Executor V2 Golden Dataset — 命令选择 + 失败归因
+
+- name: "Python项目-运行pytest"
+  input: "运行测试验证代码改动"
+  context:
+    exploration_result: "项目有 tests/ 目录，包含 pytest 测试"
+  mock_output: |
+    执行命令: pytest tests/ -v --tb=short
+    原因: 项目使用 pytest 作为测试框架
+
+    结果: 15 passed, 0 failed
+    [执行完成]
+  mock_metadata:
+    passed: true
+  expected:
+    expected_command: "pytest"
+    must_contain: ["pytest"]
+
+- name: "测试失败-正确归因"
+  input: "运行测试看看是否通过"
+  context:
+    exploration_result: "项目有测试目录"
+  mock_output: |
+    执行命令: pytest tests/ -v --tb=short
+
+    失败用例:
+    1. test_user_service.py::test_get_user_name - AssertionError: expected 'test_user' got None
+       原因: user_service.py 第45行未处理 user=None 的情况
+
+    2. test_api.py::test_user_endpoint - TypeError: 'NoneType' object is not subscriptable
+
+    结果: 13 passed, 2 failed
+    退出码: 1
+    [执行完成]
+  mock_metadata:
+    passed: false
+  expected:
+    expected_command: "pytest"
+    must_contain: ["失败", "AssertionError", "退出码"]
+
+- name: "无测试目录-回退语法检查"
+  input: "验证代码是否正确"
+  context:
+    exploration_result: "未找到 tests/ 目录，无测试框架配置"
+  mock_output: |
+    执行命令: python -m py_compile src/main.py
+    原因: 项目无测试框架，回退到 Python 语法检查
+
+    结果: 无输出 (语法正确)
+    [执行完成]
+  mock_metadata:
+    passed: true
+  expected:
+    expected_command: "py_compile"
+    must_contain: ["py_compile", "语法"]

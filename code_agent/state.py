@@ -40,6 +40,9 @@ class CodingState(TypedDict):
     test_result: Optional[str]              # 测试/运行结果
     test_passed: bool                       # 测试是否通过
 
+    # ── Agent 摘要（上下文压缩用） ──
+    agent_summaries: Optional[list[dict]]   # 各 Agent 的结构化摘要
+
     # ── 循环控制 ──
     retry_count: int                        # 当前审修轮次
     max_retries: int                        # 最大审修轮次

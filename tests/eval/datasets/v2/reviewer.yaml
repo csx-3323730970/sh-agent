@@ -1,0 +1,58 @@
+# Reviewer V2 Golden Dataset — 漏洞检出 + 误报率 + 建议质量
+
+- name: "检出SQL注入漏洞"
+  input: "审查 report_service.py 的代码安全性"
+  context:
+    exploration_result: "report_service.py 使用字符串拼接构建 SQL 查询"
+  mock_output: |
+    **审查不通过**
+
+    发现安全漏洞:
+    1. 第23行: SQL 注入风险 — 使用 f-string 直接拼接 SQL (`f"SELECT * FROM users WHERE name='{name}'"`)，攻击者可通过 name 参数注入任意 SQL。
+       修复建议: 使用参数化查询 `cursor.execute("SELECT * FROM users WHERE name=%s", (name,))`
+    2. 第45行: 同样的 SQL 拼接问题。
+  mock_metadata:
+    approved: false
+  expected:
+    injected_issues:
+      - type: "sql_injection"
+        file: "report_service.py"
+        line: 23
+        description: "第23行 f-string SQL 拼接"
+      - type: "sql_injection"
+        file: "report_service.py"
+        line: 45
+        description: "第45行字符串拼接"
+    must_contain: ["SQL", "注入", "参数化"]
+    must_not_contain: ["审查通过"]
+
+- name: "正常代码不应误报"
+  input: "审查 user_service.py 的代码质量"
+  context:
+    exploration_result: "user_service.py 已使用 ORM，无直接 SQL 拼接"
+  mock_output: |
+    **审查通过**
+    代码使用 ORM 查询，无 SQL 注入风险。
+    小建议: 第30行可增加类型注解（非阻塞项）。
+  mock_metadata:
+    approved: true
+  expected:
+    injected_issues: []
+    must_contain: ["审查通过"]
+
+- name: "检出路径穿越漏洞"
+  input: "审查 file_handler.py 的安全性"
+  mock_output: |
+    **审查不通过**
+
+    安全问题:
+    1. 第12行: 路径穿越漏洞 — `open(os.path.join(base, user_path))` 未验证 user_path 是否包含 `../`，攻击者可读取任意文件。
+       修复建议: 使用 `os.path.realpath()` 验证最终路径在 base 目录内。
+  mock_metadata:
+    approved: false
+  expected:
+    injected_issues:
+      - type: "path_traversal"
+        file: "file_handler.py"
+        line: 12
+    must_contain: ["路径穿越", "realpath"]

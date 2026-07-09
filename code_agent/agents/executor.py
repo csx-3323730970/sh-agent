@@ -1,10 +1,12 @@
 """Executor Agent — 运行测试、验证结果"""
+from threading import Lock
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
-from code_agent.model_factory import get_chat_model
+from code_agent.model_factory import get_agent_model
 from code_agent.tools.registry import AGENT_TOOLS
 from code_agent.state import CodingState
 from code_agent.project_context import get_project_context, format_project_context
+from code_agent.context_manager import get_context_manager, AgentSummary
 
 EXECUTOR_PROMPT = """你是 Code Executor，负责验证代码改动的正确性。
 
@@ -21,14 +23,24 @@ EXECUTOR_PROMPT = """你是 Code Executor，负责验证代码改动的正确性
 - 以 [执行完成] 结尾
 """
 
+_agent = None
+_lock = Lock()
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _lock:
+            if _agent is None:
+                _agent = create_react_agent(
+                    model=get_agent_model("executor"),
+                    tools=AGENT_TOOLS["executor"],
+                    prompt=EXECUTOR_PROMPT,
+                )
+    return _agent
+
 
 def executor_node(state: CodingState) -> dict:
-    agent = create_react_agent(
-        model=get_chat_model(),
-        tools=AGENT_TOOLS["executor"],
-        prompt=EXECUTOR_PROMPT,
-    )
-
     workspace = state.get("workspace_dir", ".")
     relevant_files = state.get("relevant_files", [])
     review_feedback = state.get("review_feedback", "")
@@ -51,12 +63,23 @@ def executor_node(state: CodingState) -> dict:
 
     prompt = "\n".join(prompt_parts)
 
+    ctx_mgr = get_context_manager()
     existing = list(state.get("messages", []))
-    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
+    context_messages = ctx_mgr.build_context("executor", existing, prompt)
+    result = _get_agent().invoke({"messages": context_messages})
     last_msg = result["messages"][-1].content
+
+    test_passed = "failed" not in last_msg.lower() and "error" not in last_msg.lower()
+
+    ctx_mgr.record_summary(AgentSummary(
+        agent="executor",
+        summary="测试通过" if test_passed else "测试失败",
+        key_findings=[last_msg[:200]],
+        files_touched=[],
+    ))
 
     return {
         "test_result": last_msg,
-        "test_passed": "failed" not in last_msg.lower() and "error" not in last_msg.lower(),
+        "test_passed": test_passed,
         "messages": result["messages"],
     }

@@ -4,6 +4,7 @@ from langgraph.checkpoint.redis import RedisSaver
 from code_agent.state import CodingState
 from code_agent.agents.supervisor import supervisor_node
 from code_agent.agents.explorer import explorer_node
+from code_agent.agents.parallel_explorer import parallel_explorer_node
 from code_agent.agents.coder import coder_node
 from code_agent.agents.reviewer import reviewer_node
 from code_agent.agents.executor import executor_node
@@ -77,6 +78,7 @@ def build_graph() -> StateGraph:
     # 注册节点
     builder.add_node("supervisor", supervisor_node)
     builder.add_node("explorer", explorer_node)
+    builder.add_node("parallel_explorer", parallel_explorer_node)
     builder.add_node("coder", coder_node)
     builder.add_node("reviewer", reviewer_node)
     builder.add_node("reviewer_update", after_reviewer_update)
@@ -92,6 +94,7 @@ def build_graph() -> StateGraph:
         route_after_supervisor,
         {
             "explore": "explorer",
+            "parallel_explore": "parallel_explorer",
             "code": "coder",
             "review": "reviewer",
             "execute": "executor",
@@ -99,8 +102,9 @@ def build_graph() -> StateGraph:
         }
     )
 
-    # Explorer / Executor 完成后回 Supervisor
+    # Explorer / ParallelExplorer / Executor 完成后回 Supervisor
     builder.add_edge("explorer", "supervisor")
+    builder.add_edge("parallel_explorer", "supervisor")
     builder.add_edge("executor", "supervisor")
 
     # Coder → Reviewer（自包含审修闭环）

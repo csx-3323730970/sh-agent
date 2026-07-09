@@ -1,10 +1,12 @@
 """Explorer Agent — 搜索、阅读、理解代码"""
+from threading import Lock
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
-from code_agent.model_factory import get_chat_model
+from code_agent.model_factory import get_agent_model
 from code_agent.tools.registry import AGENT_TOOLS
 from code_agent.state import CodingState
 from code_agent.project_context import get_project_context, format_project_context
+from code_agent.context_manager import get_context_manager, AgentSummary
 
 EXPLORER_PROMPT = """你是 Code Explorer，负责深入理解代码库。
 
@@ -26,14 +28,24 @@ EXPLORER_PROMPT = """你是 Code Explorer，负责深入理解代码库。
 - 读代码时关注：对外接口、数据流向、错误处理方式
 """
 
+_agent = None
+_lock = Lock()
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _lock:
+            if _agent is None:
+                _agent = create_react_agent(
+                    model=get_agent_model("explorer"),
+                    tools=AGENT_TOOLS["explorer"],
+                    prompt=EXPLORER_PROMPT,
+                )
+    return _agent
+
 
 def explorer_node(state: CodingState) -> dict:
-    agent = create_react_agent(
-        model=get_chat_model(),
-        tools=AGENT_TOOLS["explorer"],
-        prompt=EXPLORER_PROMPT,
-    )
-
     task = state.get("user_request", "")
     workspace = state.get("workspace_dir", ".")
     plan = state.get("task_plan", "")
@@ -48,17 +60,38 @@ def explorer_node(state: CodingState) -> dict:
         f"请按照工作流程探索代码库，先了解结构再深入细节。"
     )
 
+    ctx_mgr = get_context_manager()
     existing = list(state.get("messages", []))
-    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
+    context_messages = ctx_mgr.build_context("explorer", existing, prompt)
+    result = _get_agent().invoke({"messages": context_messages})
     last_msg = result["messages"][-1].content
 
     relevant_files = _extract_files(last_msg, workspace)
+
+    ctx_mgr.record_summary(AgentSummary(
+        agent="explorer",
+        summary=last_msg[:200],
+        key_findings=_extract_key_findings(last_msg),
+        files_touched=relevant_files if relevant_files else [],
+    ))
 
     return {
         "exploration_result": last_msg,
         "relevant_files": relevant_files,
         "messages": result["messages"],
     }
+
+
+def _extract_key_findings(text: str) -> list[str]:
+    """从探索结果中提取关键发现"""
+    findings = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith(("-", "•", "*", "1.", "2.", "3.")):
+            findings.append(stripped.lstrip("-•* 0123456789.")[:120])
+        if len(findings) >= 5:
+            break
+    return findings if findings else [text[:120]]
 
 
 def _extract_files(text: str, workspace: str) -> list[str]:

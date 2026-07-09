@@ -4,6 +4,22 @@ model:
   api_key_env: "OPENAI_API_KEY"
   base_url_env: "OPENAI_BASE_URL"
 
+# ── 按 Agent 角色的模型配置（可选，未配置则使用全局默认） ──
+# 多 Agent 架构的核心优势: 不同 Agent 按任务复杂度选模型
+# 简单任务 (路由/搜索/执行) → deepseek-v4-flash（快、便宜）
+# 复杂任务 (编码/审查) → deepseek-v4-pro（强推理）
+agent_models:
+  supervisor:
+    model: "deepseek-v4-flash"       # 简单任务: 路由决策不需要强推理
+  explorer:
+    model: "deepseek-v4-flash"       # 简单任务: 代码搜索和文件阅读
+  coder:
+    model: "deepseek-v4-pro"         # 复杂任务: 代码生成需要深度推理
+  reviewer:
+    model: "deepseek-v4-pro"         # 复杂任务: 安全审查需要深度分析
+  executor:
+    model: "deepseek-v4-flash"       # 简单任务: 运行测试命令
+
 # ── Redis 配置 ──
 redis:
   host: "localhost"

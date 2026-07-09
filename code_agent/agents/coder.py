@@ -1,10 +1,12 @@
 """Coder Agent — 写代码、改代码"""
+from threading import Lock
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
-from code_agent.model_factory import get_chat_model
+from code_agent.model_factory import get_agent_model
 from code_agent.tools.registry import AGENT_TOOLS
-from code_agent.state import CodingState
+from code_agent.state import CodingState, FileChange
 from code_agent.project_context import get_project_context, format_project_context
+from code_agent.context_manager import get_context_manager, AgentSummary
 
 CODER_PROMPT = """你是 Code Writer，负责编写和修改代码。
 
@@ -24,14 +26,24 @@ CODER_PROMPT = """你是 Code Writer，负责编写和修改代码。
 收到 Review 反馈时，逐条对照修改，确认修完后在末尾写 [编码完成]。
 """
 
+_agent = None
+_lock = Lock()
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _lock:
+            if _agent is None:
+                _agent = create_react_agent(
+                    model=get_agent_model("coder"),
+                    tools=AGENT_TOOLS["coder"],
+                    prompt=CODER_PROMPT,
+                )
+    return _agent
+
 
 def coder_node(state: CodingState) -> dict:
-    agent = create_react_agent(
-        model=get_chat_model(),
-        tools=AGENT_TOOLS["coder"],
-        prompt=CODER_PROMPT,
-    )
-
     task = state.get("user_request", "")
     workspace = state.get("workspace_dir", ".")
     exploration = state.get("exploration_result", "")
@@ -56,8 +68,66 @@ def coder_node(state: CodingState) -> dict:
 
     prompt = "\n".join(prompt_parts)
 
+    ctx_mgr = get_context_manager()
     existing = list(state.get("messages", []))
-    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
+    context_messages = ctx_mgr.build_context(
+        "coder", existing, prompt,
+        summaries=state.get("agent_summaries"),
+    )
+    result = _get_agent().invoke({"messages": context_messages})
     last_msg = result["messages"][-1].content
 
-    return {"code_changes": [], "messages": result["messages"]}
+    code_changes = _extract_changes(result["messages"])
+
+    ctx_mgr.record_summary(AgentSummary(
+        agent="coder",
+        summary=last_msg[:200],
+        key_findings=[],
+        files_touched=[c["file_path"] for c in code_changes if c.get("file_path")],
+    ))
+
+    return {
+        "code_changes": code_changes,
+        "messages": result["messages"],
+    }
+
+
+def _extract_changes(messages: list) -> list[FileChange]:
+    """从 Coder 的 tool 消息中提取代码改动记录"""
+    changes = []
+    for msg in messages:
+        content = msg.content if hasattr(msg, "content") else ""
+        if not isinstance(content, str):
+            continue
+
+        if not (content.startswith("[DIFF:") or content.startswith("[已写入]") or content.startswith("[已修改]")):
+            continue
+
+        name = getattr(msg, "name", "")
+        file_path = ""
+        reason = ""
+
+        if name == "write_file":
+            # 从 "[已写入] path (N 行, M 字符)" 中提取
+            for line in content.split("\n"):
+                if "[已写入]" in line:
+                    parts = line.split("[已写入]")[-1].strip().split("(")[0].strip()
+                    file_path = parts
+            reason = "创建新文件"
+
+        elif name == "edit_file":
+            for line in content.split("\n"):
+                if "[已修改]" in line:
+                    parts = line.split("[已修改]")[-1].strip().split("(")[0].strip()
+                    file_path = parts
+            reason = "修改现有文件"
+
+        if file_path:
+            changes.append(FileChange(
+                file_path=file_path,
+                original="",
+                replacement="",
+                reason=reason,
+            ))
+
+    return changes

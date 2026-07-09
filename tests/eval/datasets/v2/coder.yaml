@@ -1,0 +1,66 @@
+# Coder V2 Golden Dataset — diff 级别 ground truth + 沙箱行为验证
+
+- name: "修复空指针-单文件最小改动"
+  input: "修复 user_service.py 第 45 行的 None 检查，user 可能为 None 时不应该直接访问 user.name"
+  context:
+    exploration_result: |
+      分析了 user_service.py:
+      - 第 44-47 行: get_user_name() 函数中 user 可能为 None
+      - 第 45 行: return user.name 在 user=None 时会抛出 AttributeError
+      - 相关类型: src/models/user.py 中的 User 类定义
+      - 调用链: controller.py:30 → user_service.py:45
+  mock_output: "[编码完成] 已在 user_service.py 第44-47行添加 None 检查"
+  mock_metadata:
+    files: ["src/user_service.py"]
+  expected:
+    expected_changes:
+      - file: "src/user_service.py"
+        line_range: [44, 47]
+        must_contain_after: "if user is not None"
+        must_not_contain_after: "user.name"
+    optimal_diff_lines: 3
+    expected_behavior:
+      - test_file: "tests/test_user.py"
+        expected_result: "passed"
+    regression_tests:
+      - test_file: "tests/test_order.py"
+        expected_result: "passed"
+
+- name: "创建新文件-添加工具函数模块"
+  input: "创建一个 utils/validators.py，包含 validate_email 和 validate_phone 两个函数"
+  mock_output: "[编码完成] 已创建 utils/validators.py"
+  mock_metadata:
+    files: ["utils/validators.py"]
+  expected:
+    expected_changes:
+      - file: "utils/validators.py"
+        must_contain_after: "def validate_email"
+        must_contain_after: "def validate_phone"
+    optimal_diff_lines: 15
+    expected_behavior:
+      - test_file: "tests/test_validators.py"
+        expected_result: "passed"
+
+- name: "跨文件改动-接口变更需同步所有依赖"
+  input: "给 User 模型增加 email 字段并同步更新 schema 和 factory"
+  mock_output: "[编码完成] 已修改 models/user.py, schemas/user.py, tests/factories/user.py"
+  mock_metadata:
+    files: ["src/models/user.py", "src/schemas/user.py", "tests/factories/user.py"]
+  expected:
+    expected_changes:
+      - file: "src/models/user.py"
+        must_contain_after: "email: str"
+      - file: "src/schemas/user.py"
+        must_contain_after: "email"
+      - file: "tests/factories/user.py"
+        must_contain_after: "email"
+    dependency_chain:
+      - "src/models/user.py"
+      - "src/schemas/user.py"
+      - "tests/factories/user.py"
+    expected_behavior:
+      - test_file: "tests/test_user_model.py"
+        expected_result: "passed"
+    regression_tests:
+      - test_file: "tests/test_api.py"
+        expected_result: "passed"

@@ -1,9 +1,11 @@
 """Supervisor Agent — 任务拆解 + 动态调度"""
+from threading import Lock
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage
-from code_agent.model_factory import get_chat_model
+from code_agent.model_factory import get_agent_model
 from code_agent.state import CodingState
 from code_agent.project_context import get_project_context, format_project_context
+from code_agent.context_manager import get_context_manager, AgentSummary
 
 SUPERVISOR_PROMPT = """你是 Supervisor，一个 Multi-Agent 编码系统的调度核心。
 
@@ -14,19 +16,20 @@ SUPERVISOR_PROMPT = """你是 Supervisor，一个 Multi-Agent 编码系统的调
 3. 判断终止时机 — 目标达成时果断 finish，不要过度调度
 
 ## Agent 能力矩阵
-| Agent     | 工具                                     | 适用场景                  |
-|-----------|------------------------------------------|---------------------------|
-| Explorer  | read_file, grep, glob_files, list_dir   | 搜索代码、理解结构、定位文件 |
-| Coder     | read_file, write_file, edit_file, grep  | 写新代码、修改现有代码     |
-| Reviewer  | read_file, grep, list_dir, bash         | 审查改动、检查安全与质量   |
-| Executor  | bash, read_file                         | 运行测试、执行命令验证     |
+| Agent             | 工具                                     | 适用场景                  |
+|-------------------|------------------------------------------|---------------------------|
+| Explorer          | read_file, grep, glob_files, list_dir   | 搜索代码、理解结构、定位文件 |
+| Parallel Explorer | 同上 (多个实例并发)                       | 同时探索多个独立代码区域   |
+| Coder             | read_file, write_file, edit_file, grep  | 写新代码、修改现有代码     |
+| Reviewer          | read_file, grep, list_dir, bash         | 审查改动、检查安全与质量   |
+| Executor          | bash, read_file                         | 运行测试、执行命令验证     |
 
 ## 路由策略
 - 只读任务（分析、解释、查找）：Explorer → finish
 - 代码修改：Explorer → Coder → Reviewer → Executor → finish
 - 运行命令：Executor → finish
 - 代码审查（不改）：Explorer → Reviewer → finish
-- Reviewer 不通过时 Coder→Reviewer 自动循环，最多 {max_retries} 轮，你无需干预
+- Reviewer 不通过时 Coder→Reviewer 自动循环，你会从当前状态中知道最大轮次，你无需干预
 
 ## 输出格式
 ```
@@ -35,17 +38,26 @@ SUPERVISOR_PROMPT = """你是 Supervisor，一个 Multi-Agent 编码系统的调
 决策: <explore/code/review/execute/finish>
 ```"""
 
+_agent = None
+_lock = Lock()
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        with _lock:
+            if _agent is None:
+                _agent = create_react_agent(
+                    model=get_agent_model("supervisor"),
+                    tools=[],
+                    prompt=SUPERVISOR_PROMPT,
+                )
+    return _agent
+
 
 def supervisor_node(state: CodingState) -> dict:
     workspace = state.get("workspace_dir", ".")
     max_retries = state.get("max_retries", 3)
-    prompt_text = SUPERVISOR_PROMPT.replace("{max_retries}", str(max_retries))
-
-    agent = create_react_agent(
-        model=get_chat_model(),
-        tools=[],
-        prompt=prompt_text,
-    )
 
     # 项目上下文
     ctx = get_project_context(workspace)
@@ -82,18 +94,32 @@ def supervisor_node(state: CodingState) -> dict:
         status.append("✅ Executor 已执行测试")
 
     prompt_parts.append(f"\n## 当前状态\n" + "\n".join(f"- {s}" for s in status))
-    prompt_parts.append(f"\n审修轮次: {retry_count}/{max_retries}")
+    prompt_parts.append(f"\n审修轮次上限: {max_retries}")
+    prompt_parts.append(f"当前轮次: {retry_count}")
     prompt_parts.append("\n请输出你的任务分析和决策。")
 
     prompt = "\n".join(prompt_parts)
 
-    # 传入完整历史消息，保留多轮对话上下文
+    # 使用上下文管理器构建裁剪后的上下文
+    ctx_mgr = get_context_manager()
     existing = list(state.get("messages", []))
-    result = agent.invoke({"messages": existing + [HumanMessage(content=prompt)]})
+    context_messages = ctx_mgr.build_context(
+        "supervisor", existing, prompt,
+        summaries=state.get("agent_summaries"),
+    )
+    result = _get_agent().invoke({"messages": context_messages})
     last_msg = result["messages"][-1].content
 
     decision = _parse_decision(last_msg, state)
     task_plan = _extract_plan(last_msg)
+
+    # 记录 Supervisor 摘要
+    ctx_mgr.record_summary(AgentSummary(
+        agent="supervisor",
+        summary=task_plan[:200],
+        key_findings=[f"路由决策: {decision}"],
+        files_touched=[],
+    ))
 
     return {
         "task_plan": task_plan,
@@ -113,6 +139,8 @@ def parse_decision(text: str, exploration_result: str | None = None,
         return "finish"
 
     if not exploration_result:
+        if "parallel" in text_lower:
+            return "parallel_explore"
         return "explore"
 
     if not review_feedback:
